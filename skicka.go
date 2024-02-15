@@ -543,7 +543,7 @@ func printUsageAndExit() {
 
 const clientId = "952282617835-siotrfjbktpinek08hrnspl33d9gho1e.apps.googleusercontent.com"
 
-func getOAuthClient(tokenCacheFilename string, tryBrowserAuth bool,
+func getOAuthClient(tokenCacheFilename string,
 	transport http.RoundTripper) (*http.Client, error) {
 	if config.Google.ApiKey != "" {
 		transport = addKeyTransport{transport: transport, key: config.Google.ApiKey}
@@ -573,7 +573,7 @@ func getOAuthClient(tokenCacheFilename string, tryBrowserAuth bool,
 	// Try to read a token from the cache.
 	if token, err = readCachedToken(tokenCacheFilename, oauthConfig.ClientID); err != nil {
 		// If no token, or if the token isn't legit, have the user authorize.
-		if token, err = authorizeAndGetToken(oauthConfig, tryBrowserAuth); err != nil {
+		if token, err = authorizeAndGetToken(oauthConfig); err != nil {
 			return nil, err
 		}
 		saveToken(tokenCacheFilename, token, oauthConfig.ClientID)
@@ -623,25 +623,13 @@ func saveToken(tokenCacheFilename string, t *oauth2.Token, clientId string) {
 	fmt.Fprintf(os.Stderr, "skicka: %s: %s", tokenCacheFilename, err)
 }
 
-// Have the user authorize skicka and return the resulting token. tryBrowser
-// controls whether the function tries to open a tab in a web browser or
-// prints instructions to tell the user how to authorize manually.
-func authorizeAndGetToken(oauthConfig *oauth2.Config, tryBrowser bool) (*oauth2.Token, error) {
+// Have the user authorize skicka and return the resulting token.
+func authorizeAndGetToken(oauthConfig *oauth2.Config) (*oauth2.Token, error) {
 	var code string
 	var err error
-	if tryBrowser {
-		fmt.Printf("skicka: attempting to launch browser to authorize.\n")
-		fmt.Printf("(Re-run skicka with the -no-browser-auth option to authorize directly.)\n")
-		if code, err = codeFromWeb(oauthConfig); err != nil {
-			return nil, err
-		}
-	} else {
-		randState := fmt.Sprintf("st%d", time.Now().UnixNano())
-		url := oauthConfig.AuthCodeURL(randState)
-
-		fmt.Printf("Go to the following link in your browser:\n%v\n", url)
-		fmt.Printf("Enter verification code: ")
-		fmt.Scanln(&code)
+	fmt.Printf("skicka: attempting to launch browser to authorize.\n")
+	if code, err = codeFromWeb(oauthConfig); err != nil {
+		return nil, err
 	}
 
 	return oauthConfig.Exchange(oauth2.NoContext, code)
@@ -701,7 +689,10 @@ func openURL(url string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("Error opening URL in browser.")
+
+	// Fall back to printing the URL to console.
+	fmt.Println("Authorization URL: " + url)
+	return nil
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -900,8 +891,6 @@ General options valid for all commands:
   -metadata-cache-file <filename>
                          File to store metadata about Google Drive contents.
                          Default: ~/.skicka.metadata.cache
-  -no-browser-auth       Disables attempting to open the authorization URL in a web
-                         browser when initially authorizing skicka to access Google Drive.
   -quiet                 Suppress non-error messages.
   -tokencache <filename> OAuth2 token cache file. Default: ~/.skicka.tokencache.json.
   -verbose               Enable verbose output.
@@ -956,8 +945,6 @@ func main() {
 	qt := flag.Bool("quiet", false, "Suppress non-error messages")
 	dumpHTTP := flag.Bool("dump-http", false, "Dump http traffic")
 	flakyHTTP := flag.Bool("flaky-http", false, "Add flakiness to http traffic")
-	noBrowserAuth := flag.Bool("no-browser-auth", false,
-		"Don't try launching browser for authorization")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -1027,7 +1014,7 @@ func main() {
 	}
 
 	// And now upgrade to the OAuth Transport *http.Client.
-	client, err := getOAuthClient(*tokenCacheFilename, !*noBrowserAuth,
+	client, err := getOAuthClient(*tokenCacheFilename,
 		transport)
 	if err != nil {
 		printErrorAndExit(fmt.Errorf("error with OAuth2 Authorization: %v ", err))
