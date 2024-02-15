@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/google/skicka/gdrive"
+	"github.com/juniperrock/skicka/gdrive"
 )
 
 func getPermissionsAsString(driveFile *gdrive.File) (string, error) {

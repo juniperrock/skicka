@@ -21,7 +21,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/google/skicka/gdrive"
+	"github.com/juniperrock/skicka/gdrive"
 	"os"
 	"strings"
 	"time"
