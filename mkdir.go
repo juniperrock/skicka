@@ -52,8 +52,42 @@ func mkdir(args []string) int {
 	errs := 0
 	for ; i < len(args); i++ {
 		drivePath := filepath.Clean(args[i])
+		rootPath := string(os.PathSeparator)
+		pathSoFar := ""
 
-		parent, err := gd.GetFile(string(os.PathSeparator))
+		dirs := strings.Split(drivePath, string(os.PathSeparator))
+		if dirs[0] == "" {
+			// The first string in the split is "" if the
+			// path starts with a '/'.
+			dirs = dirs[1:]
+		}
+
+		parent, err := gd.GetFile(rootPath)
+		if err != nil {
+			// If we only have the drive.file scope and there are no folders that the
+			// application can access, getting the root directory will fail.
+			// Work around it by creating the top level directory without a parent reference.
+			var proplist []gdrive.Property
+			proplist = append(proplist, gdrive.Property{Key: "Permissions",
+				Value: fmt.Sprintf("%#o", 0755&os.ModePerm)})
+
+			_, err = gd.CreateTopLevelFolder(dirs[0], time.Now(), proplist)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "skicka: failed to create directory\n")
+				errs++
+				break
+			}
+
+			// Since the top level directory has been created now, avoid creating it twice
+			rootPath = dirs[0]
+			dirs = dirs[1:]
+			if len(dirs) == 0 {
+				continue
+			}
+		}
+
+		parent, err := gd.GetFile(rootPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "skicka: %c: no such directory\n",
 				os.PathSeparator)
@@ -61,16 +95,9 @@ func mkdir(args []string) int {
 			break
 		}
 
-		dirs := strings.Split(drivePath, string(os.PathSeparator))
 		nDirs := len(dirs)
-		pathSoFar := ""
 		// Walk through the directories in the path in turn.
 		for index, dir := range dirs {
-			if dir == "" {
-				// The first string in the split is "" if the
-				// path starts with a '/'.
-				continue
-			}
 			pathSoFar = path.Join(pathSoFar, dir)
 
 			// Get the Drive File file for our current point in the path.

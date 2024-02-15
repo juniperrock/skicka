@@ -235,6 +235,62 @@ func (gd *GDrive) tryToHandleDriveAPIError(err error, try int) error {
 	return nil
 }
 
+// createRootDriveFile creates a mock drive.File for the root folder
+func (gd *GDrive) createRootDriveFile(id string) (*drive.File, error) {
+	return &drive.File{
+		Id:           id,
+		Title:        "My Drive",
+		MimeType:     "application/vnd.google-apps.folder",
+		ModifiedDate: time.Unix(0, 0).UTC().Format(timeFormat),
+	}, nil
+}
+
+// getRootDriveFile tries to find the root file by walking up the tree from a random point.
+// This is a workaround to the fact that Google Drive API returns 404 when trying to
+// get the root file if the application only has the drive.file scope.
+func (gd *GDrive) getRootDriveFile(previousId string) (*drive.File, error) {
+	if previousId == "" {
+		// get a random folder
+		for try := 0; ; try++ {
+			query := "mimeType='application/vnd.google-apps.folder' and trashed=false"
+			files, err := gd.svc.Files.List().Q(query).MaxResults(1).Do()
+			if err == nil {
+				if len(files.Items) == 0 {
+					break
+				}
+
+				for _, p := range files.Items[0].Parents {
+					if p.IsRoot {
+						return gd.createRootDriveFile(p.Id)
+					} else {
+						return gd.getRootDriveFile(p.Id)
+					}
+				}
+			} else if err = gd.tryToHandleDriveAPIError(err, try); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		for try := 0; ; try++ {
+			file, err := gd.svc.Files.Get(previousId).Do()
+			if err == nil {
+				for _, p := range file.Parents {
+					if p.IsRoot {
+						return gd.createRootDriveFile(p.Id)
+					} else {
+						return gd.getRootDriveFile(p.Id)
+					}
+				}
+			} else if err = gd.tryToHandleDriveAPIError(err, try); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "skicka: failed to find root ID - no folders exist in the drive?\n")
+	return nil, nil
+}
+
 // getFileById returns the *drive.File corresponding to the string Id
 // Google Drive uses to uniquely identify the file. It deals with timeouts
 // and transient errors.
@@ -539,9 +595,12 @@ func (gd *GDrive) UpdateMetadataCache(filename string) error {
 
 	// TODO: store the root file metadata in the cache as well to avoid
 	// doing this each time.
-	rootDriveFile, err := gd.getFileById("root")
+	rootDriveFile, err := gd.getRootDriveFile("")
 	if err != nil {
 		return err
+	}
+	if rootDriveFile == nil {
+		return nil
 	}
 	rootFile := newFile(".", rootDriveFile)
 	gd.pathToFile[rootFile.Path] = append(gd.pathToFile[rootFile.Path], rootFile)
@@ -1195,6 +1254,49 @@ func (gd *GDrive) createFileOrFolder(name string, parent *File,
 	}
 
 	gd.dirToFiles[parent.Path] = append(gd.dirToFiles[parent.Path], file)
+	return file, nil
+}
+
+func (gd *GDrive) CreateTopLevelFolder(name string, modTime time.Time, proplist []Property) (*File, error) {
+	gd.metadataMutex.Lock()
+	defer gd.metadataMutex.Unlock()
+
+	f := &drive.File{
+		Title:        name,
+		MimeType:     "application/vnd.google-apps.folder",
+		ModifiedDate: modTime.UTC().Format(timeFormat),
+		Properties:   convertProplist(proplist),
+	}
+	f, err := gd.insertFile(f)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update the metadata cache to account for the new folder.
+	file := newFile(f.Title, f)
+
+	// Update the pathToFile map.
+	switch len(gd.pathToFile[file.Path]) {
+	case 0:
+		gd.pathToFile[file.Path] = append(gd.pathToFile[file.Path], file)
+	case 1:
+		gd.pathToFile[file.Path][0] = file
+	default:
+		panic("gdrive: creating file/folder when multiple already exist")
+	}
+
+	// TODO: store the root file metadata in the cache as well to avoid
+	// doing this each time.
+	rootDriveFile, err := gd.getRootDriveFile("")
+	if err != nil {
+		return nil, err
+	}
+	if rootDriveFile == nil {
+		panic("gdrive: could not find root ID even after creating a top level directory")
+	}
+	rootFile := newFile(".", rootDriveFile)
+	gd.pathToFile[rootFile.Path] = append(gd.pathToFile[rootFile.Path], rootFile)
+
 	return file, nil
 }
 
